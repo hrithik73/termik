@@ -195,7 +195,10 @@ final class Store {
     var selectedTab: Tab? { current?.selected }
     /// The agents popover in the title bar.
     var showAgents = false
-    var showPalette = false
+    var showPalette = false { didSet { if !showPalette { paletteQuery = ""; changingRoot = nil } } }
+    var paletteQuery = ""
+    /// Set while the palette picks a new folder for this project instead of adding one.
+    var changingRoot: Project?
     var snippets: [Snippet] = []
 
     /// Every tab with a program reporting status, across all projects.
@@ -211,16 +214,28 @@ final class Store {
 
     // MARK: Projects
 
-    func openProjectPanel() {
-        let panel = NSOpenPanel()
-        panel.canChooseDirectories = true
-        panel.canChooseFiles = false
-        panel.prompt = "Open Project"
-        if panel.runModal() == .OK, let url = panel.url { open(root: url.path(percentEncoded: false)) }
+    /// The palette in path mode, starting at the current tab's folder: Enter adds it, or type/Tab to another.
+    func addProject() {
+        showPalette = true
+        paletteQuery = ((selectedTab?.pwd ?? NSHomeDirectory()) as NSString).abbreviatingWithTildeInPath + "/"
+    }
+
+    /// The palette in path mode, starting at the project's folder.
+    func changeRoot(of p: Project) {
+        showPalette = true
+        changingRoot = p
+        paletteQuery = (p.root as NSString).abbreviatingWithTildeInPath + "/"
+    }
+
+    /// New tabs start in the new root; open tabs keep their cwd (a running agent shouldn't be cd'd under it).
+    func setRoot(_ root: String, of p: Project) {
+        if p.name == (p.root as NSString).lastPathComponent { p.name = (root as NSString).lastPathComponent }
+        p.root = root
     }
 
     func open(root: String) {
-        if let existing = projects.first(where: { $0.root == root }) { return select(existing.selected ?? existing.tabs.first, in: existing) }
+        let root = (root as NSString).standardizingPath
+        if let existing = projects.first(where: { ($0.root as NSString).standardizingPath == root }) { return select(existing.selected ?? existing.tabs.first, in: existing) }
         let p = Project(root: root)
         projects.append(p)
         newTab(in: p)
@@ -243,7 +258,7 @@ final class Store {
     // MARK: Tabs
 
     func newTab(in project: Project? = nil) {
-        guard let p = project ?? current ?? projects.first else { return openProjectPanel() }
+        guard let p = project ?? current ?? projects.first else { return addProject() }
         let tab = Tab(pwd: p.root, project: p)
         p.tabs.append(tab)
         select(tab, in: p)

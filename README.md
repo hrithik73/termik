@@ -35,7 +35,7 @@ xcodegen generate && open Ghostline.xcodeproj
 | ⌘W | Close pane (closes the tab when it's the last one) |
 | ⌘⌥←↑↓→ · ⌘[ / ⌘] | Move between panes |
 | ⌃⌘←↑↓→ · ⌃⌘= | Resize pane · equalize panes |
-| ⌘⇧O | Open a folder as a project |
+| ⌘⇧O | Add a project: ↩ adds the current folder, or type a path (⇥ completes). Also `open -a Ghostline <dir>` |
 | ⌘1–9 | Go to tab N in the current project |
 | ⌃⌘1–9 | Go to project N |
 | ⌘⇧A · ⌥⌘J | Agents list · jump to the next agent needing you |

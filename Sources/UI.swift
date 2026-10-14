@@ -76,6 +76,8 @@ private struct TitleBar: View {
 
 private struct ProjectMenu: View {
     @Environment(Store.self) private var store
+    @State private var renaming: Project?
+    @State private var newName = ""
 
     var body: some View {
         // Worst state among the projects you're not looking at, so background agents stay visible.
@@ -86,8 +88,10 @@ private struct ProjectMenu: View {
                 Toggle(p.name, isOn: Binding(get: { store.current === p }, set: { _ in store.gotoProject(i) }))
             }
             Divider()
-            Button("Open Project…") { store.openProjectPanel() }
+            Button("Add Project…") { store.addProject() }
             if let p = store.current {
+                Button("Rename Project…") { newName = p.name; renaming = p }
+                Button("Change Folder…") { store.changeRoot(of: p) }
                 Button("Reveal in Finder") { NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: p.root) }
                 Button("Close Project") { store.closeProject(p) }
             }
@@ -105,6 +109,14 @@ private struct ProjectMenu: View {
         .menuIndicator(.hidden)
         .fixedSize()
         .help(store.current?.root ?? "")
+        .alert("Rename Project", isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {
+            TextField("Name", text: $newName)
+            Button("Rename") {
+                let name = newName.trimmingCharacters(in: .whitespaces)
+                if !name.isEmpty { renaming?.name = name }
+            }
+            Button("Cancel", role: .cancel) {}
+        }
     }
 }
 
@@ -265,7 +277,6 @@ private struct AgentRow: View {
 private struct Palette: View {
     @Environment(Store.self) private var store
     @Environment(\.openWindow) private var openWindow
-    @State private var query = ""
     @State private var index = 0
     @FocusState private var focused: Bool
 
@@ -278,9 +289,11 @@ private struct Palette: View {
     }
 
     var body: some View {
-        let results = Self.filter(items, query)
+        @Bindable var store = store
+        let query = store.paletteQuery
+        let results = query.hasPrefix("/") || query.hasPrefix("~") ? folders(query) : Self.filter(items, query)
         VStack(spacing: 0) {
-            TextField("Go to a tab or project, paste a snippet, run an action…", text: $query)
+            TextField("Go to a tab or project, paste a snippet, run an action, or type a path…", text: $store.paletteQuery)
                 .textFieldStyle(.plain)
                 .font(.system(size: 15))
                 .padding(12)
@@ -288,6 +301,12 @@ private struct Palette: View {
                 .onKeyPress(.downArrow) { index = min(index + 1, results.count - 1); return .handled }
                 .onKeyPress(.upArrow) { index = max(index - 1, 0); return .handled }
                 .onKeyPress(.escape) { close(); return .handled }
+                .onKeyPress(.tab) {
+                    // Complete to the highlighted folder.
+                    guard let item = results[safe: index], item.id.hasPrefix("dir-") else { return .ignored }
+                    store.paletteQuery = item.title + "/"
+                    return .handled
+                }
                 .onSubmit { if let item = results[safe: index] { run(item) } }
                 .onChange(of: query) { index = 0 }
             Divider()
@@ -353,12 +372,41 @@ private struct Palette: View {
             Item(id: "a-agents", title: "Show Agents", subtitle: "⌘⇧A", icon: Self.symbol("sparkles")) { store.showAgents = true },
             Item(id: "a-next", title: "Next Agent Needing You", subtitle: "⌥⌘J", icon: Self.symbol("bell")) { store.nextAttention() },
             Item(id: "a-tab", title: "New Tab", subtitle: "⌘T", icon: Self.symbol("plus")) { store.newTab() },
-            Item(id: "a-open", title: "Open Project…", subtitle: "⌘⇧O", icon: Self.symbol("folder.badge.plus")) { store.openProjectPanel() },
+            Item(id: "a-open", title: "Add Project…", subtitle: "⌘⇧O", icon: Self.symbol("folder.badge.plus")) { store.addProject() },
             Item(id: "a-snippets", title: "Edit Snippets…", subtitle: "Opens the folder", icon: Self.symbol("square.and.pencil")) {
                 NSWorkspace.shared.open(Store.snippetsDir)
             },
         ]
         return items
+    }
+
+    /// "~/dev/gh" lists folders in ~/dev starting with "gh"; a trailing "/" lists the folder itself first.
+    private func folders(_ query: String) -> [Item] {
+        let path = (query as NSString).expandingTildeInPath
+        let dir = query.hasSuffix("/") ? path : (path as NSString).deletingLastPathComponent
+        let prefix = query.hasSuffix("/") ? "" : (path as NSString).lastPathComponent.lowercased()
+        let isDir = { (p: String) in
+            var d: ObjCBool = false
+            return FileManager.default.fileExists(atPath: p, isDirectory: &d) && d.boolValue
+        }
+        let names = ((try? FileManager.default.contentsOfDirectory(atPath: dir)) ?? [])
+            .filter { $0.lowercased().hasPrefix(prefix) && (!$0.hasPrefix(".") || prefix.hasPrefix(".")) }
+            .sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+        var paths = names.map { (dir as NSString).appendingPathComponent($0) }.filter(isDir)
+        if query.hasSuffix("/"), isDir(path) { paths.insert(path, at: 0) }
+        // Captured now: closing the palette clears it before the item runs.
+        let changing = store.changingRoot
+        return paths.prefix(50).map { p in
+            let title = (p as NSString).abbreviatingWithTildeInPath
+            if let changing {
+                return Item(id: "dir-\(p)", title: title, subtitle: "Use for \(changing.name)", icon: Self.symbol("folder")) {
+                    store.setRoot(p, of: changing)
+                }
+            }
+            let open = store.projects.contains { ($0.root as NSString).standardizingPath == p }
+            return Item(id: "dir-\(p)", title: title, subtitle: open ? "Open Project" : "Add Project",
+                        icon: Self.symbol("folder")) { store.open(root: p) }
+        }
     }
 
     private static func symbol(_ name: String) -> AnyView {
@@ -679,7 +727,7 @@ struct AppCommands: Commands {
     var body: some Commands {
         CommandGroup(replacing: .newItem) {
             Button("New Tab") { store.newTab() }.keyboardShortcut("t")
-            Button("Open Project…") { store.openProjectPanel() }.keyboardShortcut("o", modifiers: [.command, .shift])
+            Button("Add Project…") { store.addProject() }.keyboardShortcut("o", modifiers: [.command, .shift])
             Divider()
             // Routed through Ghostty bindings so menu and keybind behave the same (cwd inherit, close confirm).
             Button("Split Right") { focusedPane?.splitRight(nil) }.keyboardShortcut("d")

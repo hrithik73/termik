@@ -40,6 +40,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidBecomeActive(_ n: Notification) { ghostty_app_set_focus(Ghostty.shared.app, true) }
     func applicationDidResignActive(_ n: Notification) { ghostty_app_set_focus(Ghostty.shared.app, false) }
     func applicationWillTerminate(_ n: Notification) { Store.shared.save() }
+    /// `open -a Ghostline <dir>` from any terminal opens the folder as a project.
+    func application(_ app: NSApplication, open urls: [URL]) {
+        for url in urls where url.hasDirectoryPath { Store.shared.open(root: url.path(percentEncoded: false)) }
+    }
     func applicationShouldTerminateAfterLastWindowClosed(_ s: NSApplication) -> Bool { true }
 }
 
@@ -125,7 +129,7 @@ final class Ghostty {
         case GHOSTTY_ACTION_NEW_TAB:
             store.newTab(in: tab?.project)
         case GHOSTTY_ACTION_NEW_WINDOW:
-            store.openProjectPanel()
+            store.addProject()
         case GHOSTTY_ACTION_CLOSE_TAB:
             if let tab { store.close(tab) }
         case GHOSTTY_ACTION_GOTO_TAB:
