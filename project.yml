@@ -37,3 +37,4 @@ targets:
           mkdir -p "$dst"
           rsync -a --delete "$src/ghostty/" "$dst/ghostty/"
           rsync -a --delete "$src/terminfo/" "$dst/terminfo/"
+          rsync -a --delete "$SRCROOT/vendor/monaco/vs/" "$dst/monaco/vs/"

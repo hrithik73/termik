@@ -2,3 +2,4 @@
 GhosttyKit.xcframework/
 Ghostline.xcodeproj/
 build/
+vendor/monaco/

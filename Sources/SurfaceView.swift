@@ -15,7 +15,8 @@ final class SurfaceView: NSView, NSTextInputClient {
     private var tracking: NSTrackingArea?
 
     /// `inherit`: the surface being split, so the new pane gets its cwd and font size.
-    init(tab: Tab, cwd: String, inherit: ghostty_surface_t? = nil) {
+    /// `initialInput` is typed into the shell once it starts (session resume).
+    init(tab: Tab, cwd: String, inherit: ghostty_surface_t? = nil, initialInput: String? = nil) {
         self.tab = tab
         super.init(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
         var cfg = inherit.map { ghostty_surface_inherited_config($0, GHOSTTY_SURFACE_CONTEXT_SPLIT) } ?? ghostty_surface_config_new()
@@ -24,9 +25,24 @@ final class SurfaceView: NSView, NSTextInputClient {
         cfg.platform_tag = GHOSTTY_PLATFORM_MACOS
         cfg.platform = ghostty_platform_u(macos: ghostty_platform_macos_s(nsview: Unmanaged.passUnretained(self).toOpaque()))
         cfg.scale_factor = Double(NSScreen.main?.backingScaleFactor ?? 2)
-        surface = cwd.withCString { ptr in
-            cfg.working_directory = ptr
-            return ghostty_surface_new(Ghostty.shared.app, &cfg)
+        // GHOSTLINE_SESSION_FILE tells hooks/ghostline-session where to record this tab's Claude session.
+        // Ghostty copies these strings, so they only need to outlive ghostty_surface_new.
+        let session = tab.sessionFile.path(percentEncoded: false)
+        surface = cwd.withCString { cwdPtr in
+            "GHOSTLINE_SESSION_FILE".withCString { key in
+                session.withCString { value in
+                    (initialInput ?? "").withCString { input in
+                        var env = ghostty_env_var_s(key: key, value: value)
+                        cfg.working_directory = cwdPtr
+                        if initialInput != nil { cfg.initial_input = input }
+                        return withUnsafeMutablePointer(to: &env) { e in
+                            cfg.env_vars = e
+                            cfg.env_var_count = 1
+                            return ghostty_surface_new(Ghostty.shared.app, &cfg)
+                        }
+                    }
+                }
+            }
         }
         updateTrackingAreas()
     }

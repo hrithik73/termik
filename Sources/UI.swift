@@ -13,6 +13,14 @@ struct RootView: View {
             }
             .padding([.horizontal, .bottom], 12)
         }
+        .overlay {
+            if store.showPalette {
+                ZStack(alignment: .top) {
+                    Color.black.opacity(0.12).contentShape(.rect).onTapGesture { store.showPalette = false }
+                    Palette().padding(.top, 70)
+                }
+            }
+        }
         .ignoresSafeArea(.container, edges: .top)
         .background(.ultraThinMaterial)
         .frame(minWidth: 520, minHeight: 320)
@@ -37,6 +45,7 @@ private struct TitleBar: View {
                 .scrollIndicators(.never)
             }
             Spacer(minLength: 0)
+            AgentsButton()
             Button { store.newTab() } label: {
                 Image(systemName: "plus").font(.system(size: 12, weight: .medium)).frame(width: 24, height: 24).contentShape(.rect)
             }
@@ -134,6 +143,252 @@ private struct TabPill: View {
         .onHover { hovering = $0 }
         .help(tab.status.top?.msg ?? tab.pwd)
         .contextMenu { Button("Close Tab") { store.close(tab) } }
+    }
+}
+
+// MARK: Agents
+
+/// Title-bar counts of agents by state across all projects; opens the agents list.
+private struct AgentsButton: View {
+    @Environment(Store.self) private var store
+
+    var body: some View {
+        @Bindable var store = store
+        let tops = store.agents.compactMap(\.status.top)
+        Button { store.showAgents.toggle() } label: {
+            HStack(spacing: 8) {
+                ForEach([AgentState.blocked, .error, .working, .done], id: \.self) { state in
+                    let matching = tops.filter { $0.state == state }
+                    if let first = matching.first {
+                        HStack(spacing: 3) {
+                            StatusBadge(record: first)
+                            Text("\(matching.count)").font(.system(size: 11, weight: .medium).monospacedDigit())
+                        }
+                    }
+                }
+                if tops.allSatisfy({ $0.state == .idle }) {
+                    Image(systemName: "sparkles").font(.system(size: 11, weight: .medium))
+                    if !tops.isEmpty { Text("\(tops.count)").font(.system(size: 11, weight: .medium).monospacedDigit()) }
+                }
+            }
+            .padding(.horizontal, 8).frame(height: 24).contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(.secondary)
+        .help("Agents  ⌘⇧A")
+        .popover(isPresented: $store.showAgents, arrowEdge: .bottom) {
+            AgentList { store.showAgents = false }.frame(width: 380)
+        }
+    }
+}
+
+/// Every agent across projects, most urgent first. Click to jump; review its changes.
+struct AgentList: View {
+    @Environment(Store.self) private var store
+    @Environment(\.openWindow) private var openWindow
+    @Environment(\.dismiss) private var dismiss
+    var picked: (() -> Void)?
+
+    var body: some View {
+        let agents = store.agents.sorted {
+            ($0.status.top?.state.urgency ?? 0, $1.since) > ($1.status.top?.state.urgency ?? 0, $0.since)
+        }
+        VStack(alignment: .leading, spacing: 2) {
+            if agents.isEmpty {
+                Text("No agents running").foregroundStyle(.secondary).frame(maxWidth: .infinity).padding(20)
+            }
+            ForEach(agents) { tab in
+                AgentRow(tab: tab) {
+                    store.focus(tab)
+                    picked?() ?? dismiss()
+                } review: {
+                    openWindow(id: "review", value: tab.id)
+                    picked?() ?? dismiss()
+                }
+            }
+        }
+        .padding(6)
+    }
+}
+
+private struct AgentRow: View {
+    let tab: Tab
+    let open: () -> Void
+    let review: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        let top = tab.status.top
+        HStack(spacing: 8) {
+            AgentIcon(app: tab.status.app)
+            VStack(alignment: .leading, spacing: 1) {
+                HStack(spacing: 4) {
+                    Text(tab.project?.name ?? "").fontWeight(.semibold)
+                    Text("· \(tab.name)").foregroundStyle(.secondary)
+                }
+                .font(.system(size: 12.5)).lineLimit(1)
+                Text(top?.msg ?? top?.state.rawValue.capitalized ?? "")
+                    .font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
+            }
+            Spacer(minLength: 4)
+            if let stat = tab.diffStat {
+                Button(stat, action: review)
+                    .buttonStyle(.plain)
+                    .font(.system(size: 10.5, design: .monospaced)).foregroundStyle(.secondary)
+                    .help("Review changes")
+            }
+            TimelineView(.periodic(from: .now, by: 10)) { ctx in
+                Text(Self.elapsed(ctx.date.timeIntervalSince(tab.since)))
+                    .font(.system(size: 10.5).monospacedDigit()).foregroundStyle(.tertiary)
+            }
+            if let top { StatusBadge(record: top).frame(width: 12) } else { Color.clear.frame(width: 12) }
+        }
+        .padding(.horizontal, 8).padding(.vertical, 6)
+        .background(RoundedRectangle(cornerRadius: 7).fill(hovering ? AnyShapeStyle(.quaternary) : AnyShapeStyle(.clear)))
+        .contentShape(.rect)
+        .onTapGesture(perform: open)
+        .onHover { hovering = $0 }
+        .contextMenu {
+            Button("Go to Tab", action: open)
+            Button("Review Changes", action: review)
+        }
+    }
+
+    static func elapsed(_ t: TimeInterval) -> String {
+        t < 60 ? "now" : t < 3600 ? "\(Int(t / 60))m" : t < 86400 ? "\(Int(t / 3600))h" : "\(Int(t / 86400))d"
+    }
+}
+
+// MARK: Command palette
+
+/// ⌘P: jump to any tab or project, paste a snippet, or run an action, by typing a few letters.
+private struct Palette: View {
+    @Environment(Store.self) private var store
+    @Environment(\.openWindow) private var openWindow
+    @State private var query = ""
+    @State private var index = 0
+    @FocusState private var focused: Bool
+
+    struct Item: Identifiable {
+        let id: String
+        let title: String
+        let subtitle: String
+        let icon: AnyView
+        let run: () -> Void
+    }
+
+    var body: some View {
+        let results = Self.filter(items, query)
+        VStack(spacing: 0) {
+            TextField("Go to a tab or project, paste a snippet, run an action…", text: $query)
+                .textFieldStyle(.plain)
+                .font(.system(size: 15))
+                .padding(12)
+                .focused($focused)
+                .onKeyPress(.downArrow) { index = min(index + 1, results.count - 1); return .handled }
+                .onKeyPress(.upArrow) { index = max(index - 1, 0); return .handled }
+                .onKeyPress(.escape) { close(); return .handled }
+                .onSubmit { if let item = results[safe: index] { run(item) } }
+                .onChange(of: query) { index = 0 }
+            Divider()
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(spacing: 0) {
+                        ForEach(Array(results.enumerated()), id: \.element.id) { i, item in
+                            HStack(spacing: 8) {
+                                item.icon.frame(width: 18)
+                                Text(item.title).font(.system(size: 13)).lineLimit(1)
+                                Text(item.subtitle).font(.system(size: 11.5)).foregroundStyle(.secondary).lineLimit(1)
+                                Spacer(minLength: 0)
+                            }
+                            .padding(.horizontal, 10).padding(.vertical, 6)
+                            .background(RoundedRectangle(cornerRadius: 6).fill(i == index ? AnyShapeStyle(.quaternary) : AnyShapeStyle(.clear)))
+                            .contentShape(.rect)
+                            .onTapGesture { run(item) }
+                            .id(item.id)
+                        }
+                    }
+                    .padding(6)
+                }
+                .frame(maxHeight: 360)
+                .fixedSize(horizontal: false, vertical: true)
+                .onChange(of: index) { proxy.scrollTo(results[safe: index]?.id) }
+            }
+        }
+        .frame(width: 580)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(.separator, lineWidth: 0.5))
+        .shadow(color: .black.opacity(0.25), radius: 30, y: 12)
+        .onAppear {
+            store.loadSnippets()
+            focused = true
+        }
+    }
+
+    /// Tabs first (the common case), then projects, snippets, actions.
+    private var items: [Item] {
+        var items: [Item] = []
+        for p in store.projects {
+            for t in p.tabs {
+                let top = t.status.top
+                items.append(Item(id: "tab-\(t.id)", title: t.name, subtitle: [p.name, top?.msg].compactMap { $0 }.joined(separator: " · "),
+                                  icon: AnyView(AgentIcon(app: t.status.app).overlay(alignment: .bottomTrailing) {
+                                      if let top { StatusBadge(record: top).scaleEffect(0.8).offset(x: 4, y: 3) }
+                                  })) { store.focus(t) })
+            }
+        }
+        for (i, p) in store.projects.enumerated() {
+            items.append(Item(id: "project-\(p.id)", title: p.name, subtitle: "Project", icon: Self.symbol("folder")) { store.gotoProject(i) })
+        }
+        for s in store.snippets {
+            items.append(Item(id: "snippet-\(s.id)", title: s.title, subtitle: "Snippet", icon: Self.symbol("text.bubble")) {
+                store.selectedTab?.paste(s.text)
+            })
+        }
+        let tab = store.selectedTab
+        items += [
+            Item(id: "a-review", title: "Review Changes", subtitle: "⌘⇧R", icon: Self.symbol("plusminus")) {
+                if let tab { openWindow(id: "review", value: tab.id) }
+            },
+            Item(id: "a-agents", title: "Show Agents", subtitle: "⌘⇧A", icon: Self.symbol("sparkles")) { store.showAgents = true },
+            Item(id: "a-next", title: "Next Agent Needing You", subtitle: "⌥⌘J", icon: Self.symbol("bell")) { store.nextAttention() },
+            Item(id: "a-tab", title: "New Tab", subtitle: "⌘T", icon: Self.symbol("plus")) { store.newTab() },
+            Item(id: "a-open", title: "Open Project…", subtitle: "⌘⇧O", icon: Self.symbol("folder.badge.plus")) { store.openProjectPanel() },
+            Item(id: "a-snippets", title: "Edit Snippets…", subtitle: "Opens the folder", icon: Self.symbol("square.and.pencil")) {
+                NSWorkspace.shared.open(Store.snippetsDir)
+            },
+        ]
+        return items
+    }
+
+    private static func symbol(_ name: String) -> AnyView {
+        AnyView(Image(systemName: name).font(.system(size: 11, weight: .medium)).foregroundStyle(.secondary))
+    }
+
+    /// Letters of the query in order (fuzzy), title prefix matches first.
+    static func filter(_ items: [Item], _ query: String) -> [Item] {
+        let q = query.lowercased().filter { !$0.isWhitespace }
+        guard !q.isEmpty else { return items }
+        let hits = items.filter { item in
+            var rest = Substring(q)
+            for ch in (item.title + " " + item.subtitle).lowercased() where ch == rest.first { rest = rest.dropFirst() }
+            return rest.isEmpty
+        }
+        let prefix = { (i: Item) in i.title.lowercased().filter { !$0.isWhitespace }.hasPrefix(q) }
+        return hits.filter(prefix) + hits.filter { !prefix($0) }
+    }
+
+    private func run(_ item: Item) {
+        close()
+        item.run()
+    }
+
+    private func close() {
+        store.showPalette = false
+        // Hand the keyboard back to the terminal.
+        DispatchQueue.main.async {
+            if let v = store.selectedTab.flatMap({ $0.focused ?? $0.leaves.first }) { v.window?.makeFirstResponder(v) }
+        }
     }
 }
 
@@ -417,6 +672,7 @@ extension Pane {
 
 struct AppCommands: Commands {
     let store: Store
+    @Environment(\.openWindow) private var openWindow
 
     private var focusedPane: SurfaceView? { store.selectedTab.flatMap { $0.focused ?? $0.leaves.first } }
 
@@ -431,6 +687,24 @@ struct AppCommands: Commands {
             Divider()
             Button("Close Pane") { focusedPane?.closePane(nil) }.keyboardShortcut("w")
             Button("Close Tab") { if let t = store.selectedTab { store.close(t) } }.keyboardShortcut("w", modifiers: [.command, .option])
+        }
+        CommandMenu("Agents") {
+            Button("Command Palette") { store.showPalette.toggle() }.keyboardShortcut("p")
+            Divider()
+            Button("Show Agents") { store.showAgents.toggle() }.keyboardShortcut("a", modifiers: [.command, .shift])
+            Button("Next Agent Needing You") { store.nextAttention() }.keyboardShortcut("j", modifiers: [.command, .option])  // ⌘J is Ghostty's scroll_to_selection
+            Divider()
+            Button("Review Changes") { if let t = store.selectedTab { openWindow(id: "review", value: t.id) } }
+                .keyboardShortcut("r", modifiers: [.command, .shift])
+        }
+        CommandMenu("Snippets") {
+            ForEach(Array(store.snippets.prefix(9).enumerated()), id: \.element.id) { i, snippet in
+                Button(snippet.title) { store.selectedTab?.paste(snippet.text) }
+                    .keyboardShortcut(KeyEquivalent(Character("\(i + 1)")), modifiers: [.command, .option])
+            }
+            Divider()
+            Button("Reload Snippets") { store.loadSnippets() }
+            Button("Edit Snippets…") { NSWorkspace.shared.open(Store.snippetsDir) }
         }
         CommandMenu("Projects") {
             ForEach(0..<9, id: \.self) { i in

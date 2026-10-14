@@ -86,9 +86,10 @@ struct StatusBoard: Equatable {
         records = records.filter { $0.value.state == .done || $0.value.state == .error }
     }
 
-    /// The user looked at the tab, so "done" results have been seen.
+    /// The user looked at the tab, so "done" results have been seen. The agent is still
+    /// there, so it drops to idle rather than vanishing from the agents list.
     mutating func markSeen() {
-        records = records.filter { $0.value.state != .done }
+        for (k, r) in records where r.state == .done { records[k]?.state = .idle }
     }
 
     /// The record to show on the tab badge.

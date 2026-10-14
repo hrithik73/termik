@@ -1,0 +1,107 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  :root { --bg: #fff; --fg: #222; --line: #ccc; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #252526; --fg: #ddd; --line: #454545; } }
+  html, body, #diff { margin: 0; height: 100%; overflow: hidden; background: var(--bg); }
+  #ask { display: none; position: fixed; z-index: 10; top: 12px; left: 50%; transform: translateX(-50%);
+         width: min(560px, 80vw); padding: 10px; border-radius: 10px; background: var(--bg); color: var(--fg);
+         border: 1px solid var(--line); box-shadow: 0 8px 30px rgba(0,0,0,.3); font: 12px -apple-system, sans-serif; }
+  #where { margin-bottom: 6px; opacity: .7; font-family: ui-monospace, monospace; }
+  #note { box-sizing: border-box; width: 100%; height: 72px; resize: none; padding: 6px; outline: none;
+          border: 1px solid var(--line); border-radius: 6px; background: transparent; color: inherit; font: 13px -apple-system, sans-serif; }
+  .comment-line { background: rgba(232, 163, 61, .14); }
+  .comment-glyph { background: #e8a33d; border-radius: 2px; width: 4px !important; margin-left: 4px; }
+</style>
+</head>
+<body>
+<div id="diff"></div>
+<div id="ask">
+  <div id="where"></div>
+  <textarea id="note" placeholder="Comment for the agent · ↩ add · ⇧↩ newline · esc cancel"></textarea>
+</div>
+<script src="monaco/vs/loader.js"></script>
+<script>
+  // Bridge: Swift calls show(file) and setMarks(ranges); we post {type: save|comment, path, …} back.
+  const post = m => webkit.messageHandlers.ghostline.postMessage(m)
+  var diff, ed, deco, file
+
+  function show(f) {
+    file = f
+    const old = diff.getModel()
+    diff.setModel(null)
+    if (old) { old.original.dispose(); old.modified.dispose() }
+    // The path in the URI picks the language.
+    diff.setModel({
+      original: monaco.editor.createModel(f.original, undefined, monaco.Uri.from({ scheme: 'base', path: '/' + f.path })),
+      modified: monaco.editor.createModel(f.modified, undefined, monaco.Uri.file('/' + f.path)),
+    })
+    ed.updateOptions({ readOnly: f.readOnly })
+    setMarks(f.marks)
+  }
+
+  function setMarks(marks) {
+    deco?.set(marks.map(({ start, end }) => ({
+      range: new monaco.Range(start, 1, end, 1),
+      options: { isWholeLine: true, className: 'comment-line', glyphMarginClassName: 'comment-glyph' },
+    })))
+  }
+
+  function ask() {
+    if (!file) return
+    const s = ed.getSelection(), model = ed.getModel()
+    const start = s.startLineNumber
+    // A selection ending at column 1 doesn't include that line.
+    const end = s.endColumn === 1 && s.endLineNumber > start ? s.endLineNumber - 1 : s.endLineNumber
+    const box = document.getElementById('ask'), note = document.getElementById('note')
+    document.getElementById('where').textContent = `${file.path}:${start === end ? start : start + '-' + end}`
+    box.style.display = 'block'
+    note.value = ''
+    note.focus()
+    const close = () => { box.style.display = 'none'; ed.focus() }
+    note.onblur = close
+    note.onkeydown = e => {
+      if (e.key === 'Escape') close()
+      if (e.key !== 'Enter' || e.shiftKey) return
+      e.preventDefault()
+      const text = note.value.trim()
+      const code = model.getValueInRange(new monaco.Range(start, 1, end, model.getLineMaxColumn(end)))
+      if (text) post({ type: 'comment', path: file.path, start, end, code, text })
+      close()
+    }
+  }
+
+  // ponytail: file:// pages can't start web workers, so Monaco diffs on the main thread (it warns); fine below
+  // a few thousand lines, serve via a WKURLSchemeHandler if huge diffs stutter.
+  require.config({ paths: { vs: 'monaco/vs' } })
+  require(['vs/editor/editor.main'], () => {
+    const dark = matchMedia('(prefers-color-scheme: dark)')
+    const theme = () => monaco.editor.setTheme(dark.matches ? 'vs-dark' : 'vs')
+    dark.addEventListener('change', theme)
+    theme()
+    diff = monaco.editor.createDiffEditor(document.getElementById('diff'), {
+      automaticLayout: true,
+      originalEditable: false,
+      hideUnchangedRegions: { enabled: true },
+      minimap: { enabled: false },
+      glyphMargin: true,
+      fontSize: 13,
+      scrollBeyondLastLine: false,
+    })
+    ed = diff.getModifiedEditor()
+    deco = ed.createDecorationsCollection()
+    ed.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
+      if (file && !file.readOnly) post({ type: 'save', path: file.path, text: ed.getValue() })
+    })
+    ed.addAction({
+      id: 'ghostline.comment', label: 'Comment for Agent', run: ask,
+      keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter],
+      contextMenuGroupId: 'navigation', contextMenuOrder: 0,
+    })
+    post({ type: 'ready' })
+  })
+</script>
+</body>
+</html>

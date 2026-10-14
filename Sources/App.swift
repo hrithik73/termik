@@ -14,6 +14,21 @@ struct GhostlineApp: App {
         }
         .windowStyle(.hiddenTitleBar)
         .commands { AppCommands(store: store) }
+
+        WindowGroup("Review", id: "review", for: UUID.self) { $id in
+            ReviewWindow(tab: store.tab(id)).environment(store)
+        }
+        .defaultSize(width: 1280, height: 820)
+        .restorationBehavior(.disabled)  // tab ids don't survive a relaunch
+
+        MenuBarExtra {
+            AgentList().environment(store).frame(width: 360)
+        } label: {
+            let waiting = store.agents.filter { $0.status.top?.state == .blocked }.count
+            Image(systemName: waiting > 0 ? "bell.badge.fill" : "terminal")
+            if waiting > 0 { Text("\(waiting)") }
+        }
+        .menuBarExtraStyle(.window)
     }
 }
 
