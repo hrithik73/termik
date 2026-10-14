@@ -1,0 +1,186 @@
+diff --git a/include/ghostty.h b/include/ghostty.h
+index 9a12b9cad..e9333bda0 100644
+--- a/include/ghostty.h
++++ b/include/ghostty.h
+@@ -727,6 +727,11 @@ typedef struct {
+   const char* pwd;
+ } ghostty_action_pwd_s;
+ 
++// apprt.action.ProgramStatus
++typedef struct {
++  const char* body;
++} ghostty_action_program_status_s;
++
+ // apprt.action.OpenConfig
+ typedef enum {
+   // Open the config in the OS default editor.
+@@ -1016,6 +1021,7 @@ typedef enum {
+   GHOSTTY_ACTION_COPY_TITLE_TO_CLIPBOARD,
+   GHOSTTY_ACTION_MOVE_TAB_TO_NEW_WINDOW,
+   GHOSTTY_ACTION_RESIZE_WINDOW,
++  GHOSTTY_ACTION_PROGRAM_STATUS,
+ } ghostty_action_tag_e;
+ 
+ typedef union {
+@@ -1060,6 +1066,7 @@ typedef union {
+   ghostty_action_search_selected_s search_selected;
+   ghostty_action_readonly_e readonly;
+   ghostty_action_open_config_e open_config;
++  ghostty_action_program_status_s program_status;
+ } ghostty_action_u;
+ 
+ typedef struct {
+diff --git a/src/Surface.zig b/src/Surface.zig
+index 568b74d83..2a37af4ee 100644
+--- a/src/Surface.zig
++++ b/src/Surface.zig
+@@ -1156,6 +1156,23 @@ pub fn handleMessage(self: *Surface, msg: Message) !void {
+             };
+         },
+ 
++        .program_status => |w| {
++            defer w.deinit();
++
++            var stack = std.heap.stackFallback(512, self.alloc);
++            const alloc = stack.get();
++            const str = try alloc.dupeZ(u8, w.slice());
++            defer alloc.free(str);
++
++            _ = self.rt_app.performAction(
++                .{ .surface = self },
++                .program_status,
++                .{ .body = str },
++            ) catch |err| {
++                log.warn("apprt failed to report program status err={}", .{err});
++            };
++        },
++
+         .progress_report => |v| {
+             _ = self.rt_app.performAction(
+                 .{ .surface = self },
+diff --git a/src/apprt/action.zig b/src/apprt/action.zig
+index e58260cfb..ef321ba03 100644
+--- a/src/apprt/action.zig
++++ b/src/apprt/action.zig
+@@ -364,6 +364,9 @@ pub const Action = union(Key) {
+     /// split or the window is fullscreen.
+     resize_window: ResizeWindow,
+ 
++    /// OSC 7501 program status report. See ProgramStatus.
++    program_status: ProgramStatus,
++
+     /// Sync with: ghostty_action_tag_e
+     pub const Key = enum(c_int) {
+         quit,
+@@ -436,6 +439,7 @@ pub const Action = union(Key) {
+         copy_title_to_clipboard,
+         move_tab_to_new_window,
+         resize_window,
++        program_status,
+ 
+         test "ghostty.h Action.Key" {
+             try lib.checkGhosttyHEnum(Key, "GHOSTTY_ACTION_");
+@@ -774,6 +778,22 @@ pub const SetTitle = struct {
+     }
+ };
+ 
++/// OSC 7501 program status report. `body` is the validated
++/// `key=value:...` body after `7501;` (msg and title still base64).
++/// A full reset delivers `state=clear`. Only valid during the callback.
++pub const ProgramStatus = struct {
++    body: [:0]const u8,
++
++    // Sync with: ghostty_action_program_status_s
++    pub const C = extern struct {
++        body: [*:0]const u8,
++    };
++
++    pub fn cval(self: ProgramStatus) C {
++        return .{ .body = self.body.ptr };
++    }
++};
++
+ pub const Pwd = struct {
+     pwd: [:0]const u8,
+ 
+diff --git a/src/apprt/gtk/class/application.zig b/src/apprt/gtk/class/application.zig
+index cd07efaec..9c258b902 100644
+--- a/src/apprt/gtk/class/application.zig
++++ b/src/apprt/gtk/class/application.zig
+@@ -817,6 +817,7 @@ pub const Application = extern struct {
+             .check_for_updates,
+             .undo,
+             .redo,
++            .program_status,
+             => {
+                 log.warn("unimplemented action={}", .{action});
+                 return false;
+diff --git a/src/apprt/surface.zig b/src/apprt/surface.zig
+index 3b1a04d8a..b5c01b5e0 100644
+--- a/src/apprt/surface.zig
++++ b/src/apprt/surface.zig
+@@ -140,6 +140,9 @@ pub const Message = union(enum) {
+     /// Report the progress of an action using a GUI element
+     progress_report: terminal.osc.Command.ProgressReport,
+ 
++    /// OSC 7501 program status report: the validated body after `7501;`.
++    program_status: WriteReq,
++
+     /// A command has started in the shell, start a timer.
+     start_command,
+ 
+diff --git a/src/termio/stream_handler.zig b/src/termio/stream_handler.zig
+index 5d549d807..7baf6becb 100644
+--- a/src/termio/stream_handler.zig
++++ b/src/termio/stream_handler.zig
+@@ -349,6 +349,7 @@ pub const StreamHandler = struct {
+             .report_pwd => try self.reportPwd(value.url),
+             .show_desktop_notification => try self.showDesktopNotification(value.title, value.body),
+             .progress_report => self.progressReport(value),
++            .program_status => self.programStatus(value),
+             .start_hyperlink => try self.startHyperlink(value.uri, value.id),
+             .clipboard_contents => try self.clipboardContents(value.kind, value.data),
+             .semantic_prompt => try self.semanticPrompt(value),
+@@ -389,7 +390,6 @@ pub const StreamHandler = struct {
+             .title_pop,
+             .kitty_dnd,
+             .osc_unknown,
+-            .program_status,
+             => {},
+         }
+     }
+@@ -946,6 +946,7 @@ pub const StreamHandler = struct {
+ 
+         // Clear the progress bar
+         self.progressReport(.{ .state = .remove });
++        self.programStatus(.{ .report = .{ .state = .clear } });
+     }
+ 
+     /// Record a Kitty clipboard protocol session grant so future
+@@ -1946,6 +1947,26 @@ pub const StreamHandler = struct {
+     fn progressReport(self: *StreamHandler, report: terminal.osc.Command.ProgressReport) void {
+         self.surfaceMessageWriter(.{ .progress_report = report });
+     }
++
++    /// OSC 7501: forward the validated report body to the surface and
++    /// answer the support query.
++    fn programStatus(self: *StreamHandler, cmd: terminal.osc.Command.ProgramStatus) void {
++        switch (cmd) {
++            .query => |terminator| switch (terminator) {
++                inline else => |t| self.messageWriter(.{
++                    .write_stable = "\x1b]7501;?" ++ comptime t.string(),
++                }),
++            },
++            .report => |report| {
++                const body = if (report.data.len > 0) report.data else "state=clear";
++                if (apprt.surface.Message.WriteReq.init(self.alloc, body)) |req| {
++                    self.surfaceMessageWriter(.{ .program_status = req });
++                } else |err| {
++                    log.warn("error forwarding program status err={}", .{err});
++                }
++            },
++        }
++    }
+ };
+ 
+ test "kitty clipboard read: targets-only never consumes a one-time grant" {

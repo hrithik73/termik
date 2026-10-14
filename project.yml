@@ -1,0 +1,39 @@
+name: Ghostline
+options:
+  bundleIdPrefix: dev.hritik
+  deploymentTarget:
+    macOS: "15.0"
+targets:
+  Ghostline:
+    type: application
+    platform: macOS
+    sources: [Sources]
+    dependencies:
+      - framework: GhosttyKit.xcframework
+        embed: false
+      - sdk: Carbon.framework
+      - sdk: Metal.framework
+      - sdk: QuartzCore.framework
+      - sdk: CoreText.framework
+      - sdk: IOSurface.framework
+      - sdk: UserNotifications.framework
+      - sdk: libc++.tbd
+    settings:
+      base:
+        PRODUCT_NAME: Ghostline
+        PRODUCT_BUNDLE_IDENTIFIER: dev.hritik.ghostline
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_CFBundleDisplayName: Ghostline
+        INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.developer-tools
+        SWIFT_VERSION: "5.0"
+        CODE_SIGN_IDENTITY: "-"
+        ENABLE_USER_SCRIPT_SANDBOXING: NO
+        DEAD_CODE_STRIPPING: YES
+    postBuildScripts:
+      - name: Copy Ghostty resources
+        script: |
+          src="$SRCROOT/vendor/ghostty/zig-out/share"
+          dst="$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH"
+          mkdir -p "$dst"
+          rsync -a --delete "$src/ghostty/" "$dst/ghostty/"
+          rsync -a --delete "$src/terminfo/" "$dst/terminfo/"
