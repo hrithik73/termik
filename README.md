@@ -29,9 +29,11 @@ Termik isn't signed or notarized, so macOS flags it; the second command clears t
 
 Your Ghostty keybinds keep working. ⌘⇧O adds a project; `open -a Termik <dir>` does too.
 
-## Claude Code hooks
+## Claude Code
 
-Merge `hooks/claude-settings.json` into `~/.claude/settings.json` to report status and enable resume. To show usage limits in the footer, pipe your statusLine JSON to `hooks/termik-usage`. Any tool can report status with `hooks/osc7501 <state> [msg] [kind]`.
+On first launch Termik offers to connect Claude Code (later: **Agents → Connect Claude Code…**). It adds hooks to `~/.claude/settings.json` for tab status and session resume, and wraps your statusLine so the footer shows usage limits. Your file is backed up to `settings.json.bak`.
+
+Any other tool can report status with `/Applications/Termik.app/Contents/Resources/hooks/osc7501 <state> [msg] [kind]`.
 
 ## Build
 
@@ -40,6 +42,7 @@ git submodule update --init
 ./scripts/build-ghosttykit.sh      # needs Zig 0.16 and Xcode's Metal toolchain
 ./scripts/fetch-monaco.sh
 xcodegen generate && open Termik.xcodeproj
+./scripts/test-status.sh && ./scripts/test-hooks.sh
 ```
 
 `patches/0001-program-status-action.patch` makes libghostty forward OSC 7501 reports to the app.

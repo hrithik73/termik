@@ -931,6 +931,8 @@ struct AppCommands: Commands {
             Divider()
             Button("Review Changes") { if let t = store.selectedTab { openWindow(id: "review", value: t.id) } }
                 .keyboardShortcut("r", modifiers: [.command, .shift])
+            Divider()
+            Button("Connect Claude Code…") { ClaudeHooks.connect() }
         }
         CommandMenu("Snippets") {
             ForEach(Array(store.snippets.prefix(9).enumerated()), id: \.element.id) { i, snippet in

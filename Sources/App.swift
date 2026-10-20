@@ -39,6 +39,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         _ = Ghostty.shared
         NSApp.applicationIconImage = UserDefaults.standard.string(forKey: "appIcon").flatMap(NSImage.init(named:))
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
+        DispatchQueue.main.async { ClaudeHooks.offer() }
     }
     func applicationDidBecomeActive(_ n: Notification) { ghostty_app_set_focus(Ghostty.shared.app, true) }
     func applicationDidResignActive(_ n: Notification) { ghostty_app_set_focus(Ghostty.shared.app, false) }

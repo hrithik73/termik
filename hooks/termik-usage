@@ -1,6 +1,7 @@
 #!/bin/sh
-# Saves Claude's plan limits for Termik's footer. Call from your Claude statusLine script with its stdin JSON:
-#   input=$(cat); printf %s "$input" | /path/to/termik-usage
+# Saves Claude's plan limits for Termik's footer. Termik's statusLine wrapper calls this; to call it from your own
+# statusLine script instead: input=$(cat); printf %s "$input" | /path/to/termik-usage
+# plutil ships with macOS, unlike jq.
 d="$HOME/Library/Application Support/Termik"
-jq -c '.rate_limits // empty' > "$d/usage.json.tmp" 2>/dev/null && mv "$d/usage.json.tmp" "$d/usage.json"
+plutil -extract rate_limits json -o "$d/usage.json.tmp" - 2>/dev/null && mv "$d/usage.json.tmp" "$d/usage.json"
 exit 0
