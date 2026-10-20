@@ -3,7 +3,7 @@ import GhosttyKit
 
 /// One libghostty terminal surface. Ghostty attaches its Metal layer to this view.
 /// Keyboard and IME handling is adapted from Ghostty's SurfaceView_AppKit.swift (MIT).
-/// ponytail: no drag-and-drop, quicklook, services menu or accessibility text; port from Ghostty when wanted.
+/// ponytail: no quicklook, services menu or accessibility text; port from Ghostty when wanted.
 final class SurfaceView: NSView, NSTextInputClient {
     private(set) var surface: ghostty_surface_t?
     weak var tab: Tab?
@@ -45,6 +45,7 @@ final class SurfaceView: NSView, NSTextInputClient {
             }
         }
         updateTrackingAreas()
+        registerForDraggedTypes([.fileURL, .URL, .string])
     }
 
     required init?(coder: NSCoder) { fatalError() }
@@ -360,6 +361,46 @@ final class SurfaceView: NSView, NSTextInputClient {
         ghostty_surface_ime_point(surface, &x, &y, &w, &h)
         let rect = NSRect(x: x, y: frame.height - y, width: range.length == 0 ? 0 : w, height: max(h, Double(cellSize.height)))
         return window?.convertToScreen(convert(rect, to: nil)) ?? rect
+    }
+
+    // MARK: Drag and drop
+
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation { .copy }
+
+    /// Files come in as shell-escaped paths separated by spaces, like Ghostty and Terminal.
+    /// Holding ⌥ inserts the contents of text files instead; binary or over-1 MB files still insert their path.
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        guard let surface else { return false }
+        let pb = sender.draggingPasteboard
+        let contents = NSEvent.modifierFlags.contains(.option)
+        let text: String
+        if let urls = pb.readObjects(forClasses: [NSURL.self]) as? [URL], !urls.isEmpty {
+            text = urls.map { url in
+                guard url.isFileURL else { return url.absoluteString }
+                if contents, let s = Self.textContents(url) { return s }
+                return Self.shellEscape(url.path(percentEncoded: false))
+            }.joined(separator: contents ? "\n" : " ")
+        } else if let s = pb.string(forType: .string) {
+            text = s
+        } else { return false }
+        text.withCString { ghostty_surface_text(surface, $0, UInt(strlen($0))) }
+        window?.makeFirstResponder(self)
+        return true
+    }
+
+    static func textContents(_ url: URL) -> String? {
+        guard let size = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize, size <= 1 << 20,
+              let data = try? Data(contentsOf: url), !data.contains(0) else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
+
+    static func shellEscape(_ s: String) -> String {
+        var out = ""
+        for c in s {
+            if "\\ ()[]{}<>\"'`!#$&;|*?\t".contains(c) { out.append("\\") }
+            out.append(c)
+        }
+        return out
     }
 
     // MARK: Menu actions routed to Ghostty bindings

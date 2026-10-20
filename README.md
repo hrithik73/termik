@@ -1,4 +1,4 @@
-# Ghostline
+# HTerm
 
 A minimal macOS terminal on libghostty (renders and reads config exactly like Ghostty) with:
 
@@ -35,7 +35,7 @@ xcodegen generate && open Ghostline.xcodeproj
 | ⌘W | Close pane (closes the tab when it's the last one) |
 | ⌘⌥←↑↓→ · ⌘[ / ⌘] | Move between panes |
 | ⌃⌘←↑↓→ · ⌃⌘= | Resize pane · equalize panes |
-| ⌘⇧O | Add a project: ↩ adds the current folder, or type a path (⇥ completes). Also `open -a Ghostline <dir>` |
+| ⌘⇧O | Add a project: ↩ adds the current folder, or type a path (⇥ completes). Also `open -a HTerm <dir>` |
 | ⌘1–9 | Go to tab N in the current project |
 | ⌃⌘1–9 | Go to project N |
 | ⌘⇧A · ⌥⌘J | Agents list · jump to the next agent needing you |
@@ -51,3 +51,9 @@ Any tool can report with `hooks/osc7501 <state> [msg] [kind]`. Other terminals i
 
 The same file wires `hooks/ghostline-session` to SessionStart/SessionEnd. It records each tab's session id in
 `GHOSTLINE_SESSION_FILE` (set by Ghostline) so the tab can resume it; exiting Claude yourself forgets it.
+
+## Usage limits
+
+The footer shows Claude's session (5h) and weekly (7d) usage. Claude Code only exposes them to the statusLine
+command, so call `hooks/ghostline-usage` from it with the JSON on stdin (it writes `usage.json` in Ghostline's
+support folder). The meters appear after the first statusline refresh.

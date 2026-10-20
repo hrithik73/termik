@@ -6,7 +6,11 @@ import Observation
 final class Tab: Identifiable {
     let id: UUID
     var title = ""
-    var pwd: String
+    /// Set by renaming the tab; wins over every automatic name.
+    var customName: String?
+    var pwd: String {
+        didSet { if pwd != oldValue { Store.shared.visit(pwd) } }
+    }
     var status = StatusBoard() {
         didSet { if oldValue.top?.state != status.top?.state { stateChanged() } }
     }
@@ -101,7 +105,9 @@ final class Tab: Identifiable {
             .min { hypot($0.1.midX - from.midX, $0.1.midY - from.midY) < hypot($1.1.midX - from.midX, $1.1.midY - from.midY) }?.0
     }
 
-    var name: String {
+    var name: String { customName ?? autoName }
+
+    var autoName: String {
         if let t = status.top?.title { return t }
         if !title.isEmpty { return title }
         return (pwd as NSString).lastPathComponent
@@ -195,10 +201,18 @@ final class Store {
     var selectedTab: Tab? { current?.selected }
     /// The agents popover in the title bar.
     var showAgents = false
-    var showPalette = false { didSet { if !showPalette { paletteQuery = ""; changingRoot = nil } } }
+    var showPalette = false { didSet { if !showPalette { paletteQuery = ""; changingRoot = nil; switchingProject = false; addingProject = false } } }
     var paletteQuery = ""
     /// Set while the palette picks a new folder for this project instead of adding one.
     var changingRoot: Project?
+    /// Set while the palette lists only projects (⌘O).
+    var switchingProject = false
+    /// Set while the palette lists folders you've been in, z-style (⌘⇧O).
+    var addingProject = false
+    /// Every folder a tab has been in, ranked like z: how often and how recently.
+    @ObservationIgnored var visits: [String: Visit] = [:]
+    /// The project you were in before this one, so ⌘O ↩ toggles back.
+    var previous: Project?
     var snippets: [Snippet] = []
 
     /// Every tab with a program reporting status, across all projects.
@@ -214,17 +228,60 @@ final class Store {
 
     // MARK: Projects
 
-    /// The palette in path mode, starting at the current tab's folder: Enter adds it, or type/Tab to another.
+    /// The palette listing folders you've been in, z-style; "/" or "~" switches to path mode.
     func addProject() {
+        addingProject = true
         showPalette = true
-        paletteQuery = ((selectedTab?.pwd ?? NSHomeDirectory()) as NSString).abbreviatingWithTildeInPath + "/"
     }
 
-    /// The palette in path mode, starting at the project's folder.
+    /// The palette listing only projects, the previous one first.
+    func switchProject() {
+        switchingProject = true
+        showPalette = true
+    }
+
+    /// The palette listing folders you've been in, like Add Project, but picking this project's new folder.
     func changeRoot(of p: Project) {
         showPalette = true
         changingRoot = p
-        paletteQuery = (p.root as NSString).abbreviatingWithTildeInPath + "/"
+    }
+
+    // MARK: Frecent folders (like z)
+
+    struct Visit: Codable {
+        var rank: Double
+        var time: Date
+    }
+
+    func visit(_ path: String) {
+        guard path != NSHomeDirectory() else { return }
+        visits[path, default: Visit(rank: 0, time: .now)].rank += 1
+        visits[path]?.time = .now
+        // z's aging: old entries fade so the list tracks what you use now.
+        if visits.values.reduce(0, { $0 + $1.rank }) > 9000 {
+            visits = visits.compactMapValues { var v = $0; v.rank *= 0.99; return v.rank < 1 ? nil : v }
+        }
+    }
+
+    /// z's matching: every word appears in the path, in order; folders whose name matches come first, then by frecency.
+    func frecent(_ query: String) -> [String] {
+        let words = query.lowercased().split(separator: " ")
+        let matches = { (s: String) in
+            var rest = Substring(s.lowercased())
+            for w in words {
+                guard let r = rest.range(of: w) else { return false }
+                rest = rest[r.upperBound...]
+            }
+            return true
+        }
+        let score = { (v: Visit) in
+            let age = -v.time.timeIntervalSinceNow
+            return v.rank * (age < 3600 ? 4 : age < 86400 ? 2 : age < 604800 ? 0.5 : 0.25)
+        }
+        return visits.filter { matches($0.key) && FileManager.default.fileExists(atPath: $0.key) }
+            .map { (path: $0.key, name: matches(($0.key as NSString).lastPathComponent), score: score($0.value)) }
+            .sorted { ($0.name ? 1 : 0, $0.score) > ($1.name ? 1 : 0, $1.score) }
+            .prefix(50).map(\.path)
     }
 
     /// New tabs start in the new root; open tabs keep their cwd (a running agent shouldn't be cd'd under it).
@@ -244,6 +301,7 @@ final class Store {
     func closeProject(_ p: Project) {
         p.tabs.forEach { $0.closeAll() }
         projects.removeAll { $0 === p }
+        if previous === p { previous = nil }
         if current === p { current = projects.first }
         updateBadge()
         save()
@@ -274,7 +332,15 @@ final class Store {
         save()
     }
 
+    /// Drag-and-drop reorder: dragging right lands after the target, left lands before it.
+    func move(_ id: String?, to target: Tab) {
+        guard let p = target.project, let from = p.tabs.firstIndex(where: { $0.id.uuidString == id }),
+              let to = p.tabs.firstIndex(where: { $0 === target }), from != to else { return }
+        p.tabs.insert(p.tabs.remove(at: from), at: to)
+    }
+
     func select(_ tab: Tab?, in project: Project) {
+        if project !== current { previous = current }
         current = project
         project.selected = tab
         tab?.status.markSeen()
@@ -322,9 +388,10 @@ final class Store {
 
     private struct Saved: Codable {
         /// `ids` parallels `tabs`; optional so older state files still load.
-        struct P: Codable { var id: UUID; var root: String; var name: String; var tabs: [String]; var ids: [UUID]?; var selected: Int? }
+        struct P: Codable { var id: UUID; var root: String; var name: String; var tabs: [String]; var ids: [UUID]?; var names: [String?]?; var selected: Int? }
         var projects: [P]
         var current: UUID?
+        var visits: [String: Visit]?
     }
 
     static let dir: URL = {
@@ -337,9 +404,9 @@ final class Store {
 
     func save() {
         let s = Saved(projects: projects.map { p in
-            .init(id: p.id, root: p.root, name: p.name, tabs: p.tabs.map(\.pwd), ids: p.tabs.map(\.id),
+            .init(id: p.id, root: p.root, name: p.name, tabs: p.tabs.map(\.pwd), ids: p.tabs.map(\.id), names: p.tabs.map(\.customName),
                   selected: p.tabs.firstIndex { $0 === p.selected })
-        }, current: current?.id)
+        }, current: current?.id, visits: visits)
         try? JSONEncoder().encode(s).write(to: file)
     }
 
@@ -352,10 +419,13 @@ final class Store {
             p.tabs = sp.tabs.enumerated().map { i, pwd in
                 Tab(id: sp.ids?[safe: i] ?? UUID(), pwd: FileManager.default.fileExists(atPath: pwd) ? pwd : sp.root, project: p)
             }
+            for (t, name) in zip(p.tabs, sp.names ?? []) { t.customName = name }
             p.selected = sp.selected.flatMap { p.tabs.indices.contains($0) ? p.tabs[$0] : nil } ?? p.tabs.first
             projects.append(p)
         }
         current = projects.first { $0.id == s.current } ?? projects.first
+        // First run with visit tracking: start from the folders already open.
+        visits = s.visits ?? Dictionary(projects.flatMap { [$0.root] + $0.tabs.map(\.pwd) }.map { ($0, Visit(rank: 1, time: .now)) }) { a, _ in a }
     }
 }
 

@@ -9,21 +9,72 @@ struct RootView: View {
         VStack(spacing: 0) {
             TitleBar()
             Group {
-                if let tab = store.selectedTab { TerminalCard(tab: tab) } else { EmptyState() }
+                // Read here so SwiftUI tracks layout and focus changes.
+                if let tab = store.selectedTab { TerminalHost(tab: tab, layout: tab.root.signature, focused: tab.focused) } else { EmptyState() }
             }
-            .padding([.horizontal, .bottom], 12)
+            .padding(.horizontal, 8)
+            UsageBar()
         }
         .overlay {
-            if store.showPalette {
-                ZStack(alignment: .top) {
-                    Color.black.opacity(0.12).contentShape(.rect).onTapGesture { store.showPalette = false }
-                    Palette().padding(.top, 70)
+            ZStack(alignment: .top) {
+                if store.showPalette {
+                    Color.black.opacity(0.15).contentShape(.rect).onTapGesture { store.showPalette = false }
+                        .transition(.opacity)
+                    Palette().padding(.top, 56)
+                        .transition(.scale(scale: 0.97, anchor: .top).combined(with: .opacity))
                 }
             }
+            .animation(reduceMotion ? nil : .spring(duration: 0.22, bounce: 0.15), value: store.showPalette)
         }
         .ignoresSafeArea(.container, edges: .top)
-        .background(.ultraThinMaterial)
+        // Chrome takes the terminal's colours so the window reads as one surface.
+        .background(Color(nsColor: Ghostty.shared.background))
+        .preferredColorScheme(Ghostty.shared.background.isDark ? .dark : .light)
         .frame(minWidth: 520, minHeight: 320)
+    }
+}
+
+// MARK: Usage
+
+/// Claude plan limits (session = 5h window, weekly = 7d), from `rate_limits` in Claude Code's statusline JSON,
+/// which `hooks/ghostline-usage` saves to usage.json.
+private struct UsageBar: View {
+    private struct Limit: Decodable { var used_percentage: Double; var resets_at: Double? }
+    private struct Limits: Decodable { var five_hour: Limit?; var seven_day: Limit? }
+
+    var body: some View {
+        // Poll the file; the statusline rewrites it whenever Claude updates.
+        TimelineView(.periodic(from: .now, by: 20)) { _ in
+            let limits = (try? JSONDecoder().decode(Limits.self, from: Data(contentsOf: Store.dir.appending(path: "usage.json"))))
+            HStack(spacing: 14) {
+                Spacer()
+                if let l = limits?.five_hour { Meter(label: "Session", limit: l.used_percentage, resets: l.resets_at) }
+                if let l = limits?.seven_day { Meter(label: "Weekly", limit: l.used_percentage, resets: l.resets_at) }
+            }
+            .padding(.horizontal, 12)
+            .frame(height: 22)
+        }
+    }
+
+    private struct Meter: View {
+        let label: String
+        let limit: Double
+        let resets: Double?
+
+        var body: some View {
+            let pct = min(max(limit, 0), 100)
+            HStack(spacing: 6) {
+                Text(label).foregroundStyle(.secondary)
+                Capsule().fill(.quaternary).frame(width: 56, height: 4)
+                    .overlay(alignment: .leading) {
+                        Capsule().fill(pct >= 90 ? Color.red.opacity(0.8) : Color(red: 215 / 255, green: 119 / 255, blue: 87 / 255))
+                            .frame(width: 56 * pct / 100)
+                    }
+                Text("\(Int(pct))%").monospacedDigit()
+            }
+            .font(.system(size: 10))
+            .help(resets.map { "Resets " + Date(timeIntervalSince1970: $0).formatted(.relative(presentation: .named)) } ?? label)
+        }
     }
 }
 
@@ -31,6 +82,7 @@ struct RootView: View {
 
 private struct TitleBar: View {
     @Environment(Store.self) private var store
+    @Namespace private var pill
 
     var body: some View {
         HStack(spacing: 6) {
@@ -39,8 +91,13 @@ private struct TitleBar: View {
             if let p = store.current {
                 ScrollView(.horizontal) {
                     HStack(spacing: 2) {
-                        ForEach(p.tabs) { TabPill(tab: $0, project: p) }
+                        ForEach(p.tabs) {
+                            TabPill(tab: $0, project: p, pill: pill)
+                                .transition(.scale(scale: 0.85).combined(with: .opacity))
+                        }
                     }
+                    .animation(reduceMotion ? nil : .spring(duration: 0.28, bounce: 0.15), value: p.tabs.map(\.id))
+                    .animation(reduceMotion ? nil : .spring(duration: 0.25, bounce: 0.1), value: p.selected?.id)
                 }
                 .scrollIndicators(.never)
             }
@@ -88,6 +145,7 @@ private struct ProjectMenu: View {
                 Toggle(p.name, isOn: Binding(get: { store.current === p }, set: { _ in store.gotoProject(i) }))
             }
             Divider()
+            Button("Switch Project…") { store.switchProject() }.keyboardShortcut("o")
             Button("Add Project…") { store.addProject() }
             if let p = store.current {
                 Button("Rename Project…") { newName = p.name; renaming = p }
@@ -97,7 +155,7 @@ private struct ProjectMenu: View {
             }
         } label: {
             HStack(spacing: 6) {
-                Text(store.current?.name ?? "Ghostline").font(.system(size: 12.5, weight: .semibold))
+                Text(store.current?.name ?? "HTerm").font(.system(size: 12.5, weight: .semibold))
                 Image(systemName: "chevron.down").font(.system(size: 8, weight: .bold)).foregroundStyle(.tertiary)
                 if let others { StatusBadge(record: others) }
             }
@@ -108,7 +166,7 @@ private struct ProjectMenu: View {
         .buttonStyle(.plain)
         .menuIndicator(.hidden)
         .fixedSize()
-        .help(store.current?.root ?? "")
+        .help("\(store.current?.root ?? "")\nSwitch Project  ⌘O")
         .alert("Rename Project", isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {
             TextField("Name", text: $newName)
             Button("Rename") {
@@ -124,20 +182,35 @@ private struct TabPill: View {
     @Environment(Store.self) private var store
     let tab: Tab
     let project: Project
+    let pill: Namespace.ID
     @State private var hovering = false
+    @State private var renaming = false
+    @State private var draft = ""
+    @FocusState private var fieldFocused: Bool
 
     var body: some View {
         let selected = project.selected === tab
         HStack(spacing: 6) {
             AgentIcon(app: tab.status.app)
-            Text(tab.name)
-                .font(.system(size: 12.5))
-                .lineLimit(1)
-                .truncationMode(.middle)
-                .frame(maxWidth: 200, alignment: .leading)
-                .fixedSize(horizontal: true, vertical: false)
+            if renaming {
+                TextField("", text: $draft)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 12.5))
+                    .frame(width: 140)
+                    .focused($fieldFocused)
+                    .onSubmit { fieldFocused = false }
+                    .onExitCommand { draft = tab.name; fieldFocused = false }
+                    .onChange(of: fieldFocused) { if !fieldFocused { commitRename() } }
+            } else {
+                Text(tab.name)
+                    .font(.system(size: 12.5))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .frame(maxWidth: 200, alignment: .leading)
+                    .fixedSize(horizontal: true, vertical: false)
+            }
             ZStack {
-                if hovering {
+                if hovering && !renaming {
                     Button { store.close(tab) } label: { Image(systemName: "xmark").font(.system(size: 8, weight: .bold)) }
                         .buttonStyle(.plain)
                         .foregroundStyle(.secondary)
@@ -149,12 +222,42 @@ private struct TabPill: View {
         }
         .foregroundStyle(selected ? .primary : .secondary)
         .padding(.horizontal, 10).padding(.vertical, 5)
-        .background(Capsule().fill(selected ? AnyShapeStyle(.quaternary) : AnyShapeStyle(.clear)))
+        .background {
+            if selected {
+                Capsule().fill(.quaternary).matchedGeometryEffect(id: "selected", in: pill)
+            } else if hovering {
+                Capsule().fill(.quaternary.opacity(0.5))
+            }
+        }
+        .animation(.easeOut(duration: 0.12), value: hovering)
         .contentShape(Capsule())
         .onTapGesture { store.select(tab, in: project) }
+        .simultaneousGesture(TapGesture(count: 2).onEnded(startRename))
         .onHover { hovering = $0 }
+        .draggable(tab.id.uuidString) { Text(tab.name).font(.system(size: 12.5)).padding(6) }
+        .dropDestination(for: String.self) { ids, _ in
+            store.move(ids.first, to: tab)
+            return true
+        }
         .help(tab.status.top?.msg ?? tab.pwd)
-        .contextMenu { Button("Close Tab") { store.close(tab) } }
+        .contextMenu {
+            Button("Rename Tab", action: startRename)
+            Button("Close Tab") { store.close(tab) }
+        }
+    }
+
+    private func startRename() {
+        draft = tab.name
+        renaming = true
+        DispatchQueue.main.async { fieldFocused = true }
+    }
+
+    /// Empty name goes back to the automatic one (agent title, shell title, folder).
+    private func commitRename() {
+        guard renaming else { return }
+        let name = draft.trimmingCharacters(in: .whitespaces)
+        tab.customName = name.isEmpty || name == tab.autoName ? nil : name
+        renaming = false
     }
 }
 
@@ -279,6 +382,7 @@ private struct Palette: View {
     @Environment(\.openWindow) private var openWindow
     @State private var index = 0
     @FocusState private var focused: Bool
+    @Namespace private var highlight
 
     struct Item: Identifiable {
         let id: String
@@ -291,15 +395,20 @@ private struct Palette: View {
     var body: some View {
         @Bindable var store = store
         let query = store.paletteQuery
-        let results = query.hasPrefix("/") || query.hasPrefix("~") ? folders(query) : Self.filter(items, query)
+        let picking = store.addingProject || store.changingRoot != nil
+        let results = query.hasPrefix("/") || query.hasPrefix("~") ? folders(query)
+            : picking ? store.frecent(query).map(dirItem)
+            : Self.filter(store.switchingProject ? projectItems : items, query)
         VStack(spacing: 0) {
-            TextField("Go to a tab or project, paste a snippet, run an action, or type a path…", text: $store.paletteQuery)
+            TextField(picking ? "Jump to a folder you've been in, or type a path…"
+                      : store.switchingProject ? "Switch to a project…" : "Go to a tab or project, paste a snippet, run an action, or type a path…",
+                      text: $store.paletteQuery)
                 .textFieldStyle(.plain)
                 .font(.system(size: 15))
                 .padding(12)
                 .focused($focused)
-                .onKeyPress(.downArrow) { index = min(index + 1, results.count - 1); return .handled }
-                .onKeyPress(.upArrow) { index = max(index - 1, 0); return .handled }
+                .onKeyPress(.downArrow) { move(to: min(index + 1, results.count - 1)); return .handled }
+                .onKeyPress(.upArrow) { move(to: max(index - 1, 0)); return .handled }
                 .onKeyPress(.escape) { close(); return .handled }
                 .onKeyPress(.tab) {
                     // Complete to the highlighted folder.
@@ -321,7 +430,9 @@ private struct Palette: View {
                                 Spacer(minLength: 0)
                             }
                             .padding(.horizontal, 10).padding(.vertical, 6)
-                            .background(RoundedRectangle(cornerRadius: 6).fill(i == index ? AnyShapeStyle(.quaternary) : AnyShapeStyle(.clear)))
+                            .background {
+                                if i == index { RoundedRectangle(cornerRadius: 6).fill(.quaternary).matchedGeometryEffect(id: "hl", in: highlight) }
+                            }
                             .contentShape(.rect)
                             .onTapGesture { run(item) }
                             .id(item.id)
@@ -356,9 +467,7 @@ private struct Palette: View {
                                   })) { store.focus(t) })
             }
         }
-        for (i, p) in store.projects.enumerated() {
-            items.append(Item(id: "project-\(p.id)", title: p.name, subtitle: "Project", icon: Self.symbol("folder")) { store.gotoProject(i) })
-        }
+        items += projectItems
         for s in store.snippets {
             items.append(Item(id: "snippet-\(s.id)", title: s.title, subtitle: "Snippet", icon: Self.symbol("text.bubble")) {
                 store.selectedTab?.paste(s.text)
@@ -372,12 +481,28 @@ private struct Palette: View {
             Item(id: "a-agents", title: "Show Agents", subtitle: "⌘⇧A", icon: Self.symbol("sparkles")) { store.showAgents = true },
             Item(id: "a-next", title: "Next Agent Needing You", subtitle: "⌥⌘J", icon: Self.symbol("bell")) { store.nextAttention() },
             Item(id: "a-tab", title: "New Tab", subtitle: "⌘T", icon: Self.symbol("plus")) { store.newTab() },
+            Item(id: "a-switch", title: "Switch Project…", subtitle: "⌘O", icon: Self.symbol("arrow.left.arrow.right")) { store.switchProject() },
             Item(id: "a-open", title: "Add Project…", subtitle: "⌘⇧O", icon: Self.symbol("folder.badge.plus")) { store.addProject() },
             Item(id: "a-snippets", title: "Edit Snippets…", subtitle: "Opens the folder", icon: Self.symbol("square.and.pencil")) {
                 NSWorkspace.shared.open(Store.snippetsDir)
             },
         ]
         return items
+    }
+
+    /// The previous project first so ⌘O ↩ toggles back, the current one last, the rest in menu order between.
+    private var projectItems: [Item] {
+        let rank = { (p: Project) in p === store.previous ? 0 : p === store.current ? 2 : 1 }
+        let ordered = store.projects.enumerated().sorted { (rank($0.element), $0.offset) < (rank($1.element), $1.offset) }.map(\.element)
+        return ordered.map { p in
+            let top = p.top
+            let tabs = p.tabs.count == 1 ? "1 tab" : "\(p.tabs.count) tabs"
+            let subtitle = [p === store.current ? "Current" : nil, tabs, top?.msg].compactMap { $0 }.joined(separator: " · ")
+            return Item(id: "project-\(p.id)", title: p.name, subtitle: subtitle,
+                        icon: AnyView(Self.symbol("folder").overlay(alignment: .bottomTrailing) {
+                            if let top { StatusBadge(record: top).scaleEffect(0.8).offset(x: 4, y: 3) }
+                        })) { store.select(p.selected ?? p.tabs.first, in: p) }
+        }
     }
 
     /// "~/dev/gh" lists folders in ~/dev starting with "gh"; a trailing "/" lists the folder itself first.
@@ -394,19 +519,20 @@ private struct Palette: View {
             .sorted { $0.localizedStandardCompare($1) == .orderedAscending }
         var paths = names.map { (dir as NSString).appendingPathComponent($0) }.filter(isDir)
         if query.hasSuffix("/"), isDir(path) { paths.insert(path, at: 0) }
+        return paths.prefix(50).map(dirItem)
+    }
+
+    private func dirItem(_ p: String) -> Item {
+        let title = (p as NSString).abbreviatingWithTildeInPath
         // Captured now: closing the palette clears it before the item runs.
-        let changing = store.changingRoot
-        return paths.prefix(50).map { p in
-            let title = (p as NSString).abbreviatingWithTildeInPath
-            if let changing {
-                return Item(id: "dir-\(p)", title: title, subtitle: "Use for \(changing.name)", icon: Self.symbol("folder")) {
-                    store.setRoot(p, of: changing)
-                }
+        if let changing = store.changingRoot {
+            return Item(id: "dir-\(p)", title: title, subtitle: "Use for \(changing.name)", icon: Self.symbol("folder")) {
+                store.setRoot(p, of: changing)
             }
-            let open = store.projects.contains { ($0.root as NSString).standardizingPath == p }
-            return Item(id: "dir-\(p)", title: title, subtitle: open ? "Open Project" : "Add Project",
-                        icon: Self.symbol("folder")) { store.open(root: p) }
         }
+        let open = store.projects.contains { ($0.root as NSString).standardizingPath == p }
+        return Item(id: "dir-\(p)", title: title, subtitle: open ? "Open Project" : "Add Project",
+                    icon: Self.symbol("folder")) { store.open(root: p) }
     }
 
     private static func symbol(_ name: String) -> AnyView {
@@ -426,6 +552,10 @@ private struct Palette: View {
         return hits.filter(prefix) + hits.filter { !prefix($0) }
     }
 
+    private func move(to i: Int) {
+        withAnimation(reduceMotion ? nil : .snappy(duration: 0.14)) { index = i }
+    }
+
     private func run(_ item: Item) {
         close()
         item.run()
@@ -436,29 +566,6 @@ private struct Palette: View {
         // Hand the keyboard back to the terminal.
         DispatchQueue.main.async {
             if let v = store.selectedTab.flatMap({ $0.focused ?? $0.leaves.first }) { v.window?.makeFirstResponder(v) }
-        }
-    }
-}
-
-// MARK: Terminal card
-
-private struct TerminalCard: View {
-    let tab: Tab
-
-    var body: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 6) {
-                AgentIcon(app: tab.status.app)
-                Text(tab.name).font(.system(size: 12, weight: .semibold)).lineLimit(1)
-                if let name = tab.project?.name {
-                    Text("· \(name)").font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(1)
-                }
-                Spacer(minLength: 0)
-            }
-            .padding(.horizontal, 4).padding(.bottom, 8)
-            .help(tab.pwd)
-            // Read here so SwiftUI tracks layout and focus changes.
-            TerminalHost(tab: tab, layout: tab.root.signature, focused: tab.focused)
         }
     }
 }
@@ -548,8 +655,19 @@ private struct TerminalHost: NSViewRepresentable {
     let layout: String
     let focused: SurfaceView?
 
-    func makeNSView(context: Context) -> SplitHost { SplitHost() }
+    func makeNSView(context: Context) -> SplitHost {
+        let host = SplitHost()
+        host.wantsLayer = true
+        return host
+    }
     func updateNSView(_ host: SplitHost, context: Context) { host.show(tab, layout: layout) }
+}
+
+extension NSColor {
+    var isDark: Bool {
+        guard let c = usingColorSpace(.sRGB) else { return true }
+        return 0.2126 * c.redComponent + 0.7152 * c.greenComponent + 0.0722 * c.blueComponent < 0.5
+    }
 }
 
 private var reduceMotion: Bool { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
@@ -563,6 +681,12 @@ final class SplitHost: NSView {
     func show(_ tab: Tab, layout: String) {
         let sameTab = self.tab === tab
         if !sameTab || layout != self.layout || subviews.isEmpty {
+            if !sameTab, self.tab != nil, !reduceMotion {
+                let fade = CATransition()
+                fade.type = .fade
+                fade.duration = 0.12
+                layer?.add(fade, forKey: "switch")
+            }
             let old = sameTab ? leaves : [:]
             leaves = [:]
             subviews.forEach { $0.removeFromSuperview() }
@@ -589,6 +713,7 @@ final class SplitHost: NSView {
             return leaf
         }
         let split = PaneSplitView(p)
+        if fade { split.growIndex = p.children.firstIndex { $0.view.map { old[ObjectIdentifier($0)] == nil } ?? false } }
         p.children.forEach { split.addSubview(build($0, old, fade: fade)) }
         return split
     }
@@ -614,7 +739,7 @@ final class LeafView: NSView {
         layer?.cornerRadius = 10
         layer?.cornerCurve = .continuous
         layer?.masksToBounds = true
-        layer?.borderWidth = 0.5
+        layer?.borderWidth = 1 // 0.5pt vanishes on edges that land between pixels
         layer?.borderColor = NSColor.separatorColor.cgColor
         layer?.backgroundColor = Ghostty.shared.background.cgColor
         addSubview(surface)
@@ -629,7 +754,7 @@ final class LeafView: NSView {
     /// Inset keeps text off the card edges; the dim still covers the whole card.
     override func layout() {
         super.layout()
-        surface.frame = bounds.insetBy(dx: 12, dy: 10)
+        surface.frame = bounds.insetBy(dx: 10, dy: 8)
         dim.frame = bounds
     }
 
@@ -643,7 +768,7 @@ final class LeafView: NSView {
         let a = CABasicAnimation(keyPath: "opacity")
         a.fromValue = 0
         a.toValue = 1
-        a.duration = 0.18
+        a.duration = 0.1
         a.timingFunction = CAMediaTimingFunction(name: .easeOut)
         layer?.add(a, forKey: "fadeIn")
     }
@@ -654,6 +779,9 @@ final class PaneSplitView: NSSplitView, NSSplitViewDelegate {
     private weak var pane: Pane?
     /// Ratio writes are ignored until the first real layout, so the initial zero-size pass can't clobber it.
     private var settled = false
+    /// Index of a just-added pane: the divider slides from that pane's edge to the pane's ratio.
+    var growIndex: Int?
+    private var timer: Timer?
 
     init(_ pane: Pane) {
         self.pane = pane
@@ -666,24 +794,42 @@ final class PaneSplitView: NSSplitView, NSSplitViewDelegate {
 
     required init?(coder: NSCoder) { fatalError() }
 
-    override var dividerThickness: CGFloat { 10 }
+    override var dividerThickness: CGFloat { 8 }
     override func drawDivider(in rect: NSRect) {}
 
     var length: CGFloat { (isVertical ? bounds.width : bounds.height) - dividerThickness }
 
     func applyRatio() {
         guard let pane, length > 0 else { return }
+        timer?.invalidate(); timer = nil
         setPosition((pane.ratio * length).rounded(), ofDividerAt: 0)
         settled = true
     }
 
     override func layout() {
         super.layout()
-        if !settled { applyRatio() }
+        guard !settled else { return }
+        if let growIndex, length > 0, !reduceMotion { settled = true; slide(from: growIndex == 0 ? 0 : 1) } else { applyRatio() }
     }
 
+    /// ponytail: reflows the terminals every frame (same as a divider drag); fine for ~0.2s.
+    private func slide(from start: CGFloat) {
+        guard let pane else { return }
+        let target = pane.ratio, t0 = CACurrentMediaTime(), dur = 0.1
+        setPosition((start * length).rounded(), ofDividerAt: 0)
+        timer = Timer.scheduledTimer(withTimeInterval: 1 / 60, repeats: true) { [weak self] t in
+            guard let self else { return t.invalidate() }
+            let k = min((CACurrentMediaTime() - t0) / dur, 1)
+            let e = 1 - pow(1 - k, 4)
+            self.setPosition(((start + (target - start) * e) * self.length).rounded(), ofDividerAt: 0)
+            if k >= 1 { t.invalidate(); self.timer = nil; pane.ratio = target }
+        }
+    }
+
+    deinit { timer?.invalidate() }
+
     func splitViewDidResizeSubviews(_ n: Notification) {
-        guard settled, let pane, length > 0, let first = subviews.first else { return }
+        guard settled, timer == nil, let pane, length > 0, let first = subviews.first else { return }
         pane.ratio = (isVertical ? first.frame.width : first.frame.height) / length
     }
 
@@ -727,6 +873,7 @@ struct AppCommands: Commands {
     var body: some Commands {
         CommandGroup(replacing: .newItem) {
             Button("New Tab") { store.newTab() }.keyboardShortcut("t")
+            Button("Switch Project…") { store.switchProject() }.keyboardShortcut("o")
             Button("Add Project…") { store.addProject() }.keyboardShortcut("o", modifiers: [.command, .shift])
             Divider()
             // Routed through Ghostty bindings so menu and keybind behave the same (cwd inherit, close confirm).

@@ -3,3 +3,5 @@ GhosttyKit.xcframework/
 Ghostline.xcodeproj/
 build/
 vendor/monaco/
+.build/
+.DS_Store

@@ -9,7 +9,7 @@ struct GhostlineApp: App {
     @State private var store = Store.shared
 
     var body: some Scene {
-        Window("Ghostline", id: "main") {
+        Window("HTerm", id: "main") {
             RootView().environment(store)
         }
         .windowStyle(.hiddenTitleBar)
@@ -40,7 +40,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidBecomeActive(_ n: Notification) { ghostty_app_set_focus(Ghostty.shared.app, true) }
     func applicationDidResignActive(_ n: Notification) { ghostty_app_set_focus(Ghostty.shared.app, false) }
     func applicationWillTerminate(_ n: Notification) { Store.shared.save() }
-    /// `open -a Ghostline <dir>` from any terminal opens the folder as a project.
+    /// `open -a HTerm <dir>` from any terminal opens the folder as a project.
     func application(_ app: NSApplication, open urls: [URL]) {
         for url in urls where url.hasDirectoryPath { Store.shared.open(root: url.path(percentEncoded: false)) }
     }
@@ -148,7 +148,7 @@ final class Ghostty {
             }
         case GHOSTTY_ACTION_DESKTOP_NOTIFICATION:
             let n = a.action.desktop_notification
-            notify(n.title.map { String(cString: $0) } ?? "Ghostline", n.body.map { String(cString: $0) } ?? "")
+            notify(n.title.map { String(cString: $0) } ?? "HTerm", n.body.map { String(cString: $0) } ?? "")
         case GHOSTTY_ACTION_RING_BELL:
             NSSound.beep()
         case GHOSTTY_ACTION_TOGGLE_FULLSCREEN:

@@ -20,10 +20,11 @@ targets:
       - sdk: libc++.tbd
     settings:
       base:
-        PRODUCT_NAME: Ghostline
+        PRODUCT_NAME: HTerm
         PRODUCT_BUNDLE_IDENTIFIER: dev.hritik.ghostline
         GENERATE_INFOPLIST_FILE: YES
-        INFOPLIST_KEY_CFBundleDisplayName: Ghostline
+        INFOPLIST_KEY_CFBundleDisplayName: HTerm
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.developer-tools
         SWIFT_VERSION: "5.0"
         CODE_SIGN_IDENTITY: "-"
