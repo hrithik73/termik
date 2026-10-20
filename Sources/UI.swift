@@ -37,7 +37,7 @@ struct RootView: View {
 // MARK: Usage
 
 /// Claude plan limits (session = 5h window, weekly = 7d), from `rate_limits` in Claude Code's statusline JSON,
-/// which `hooks/ghostline-usage` saves to usage.json.
+/// which `hooks/termik-usage` saves to usage.json.
 private struct UsageBar: View {
     private struct Limit: Decodable { var used_percentage: Double; var resets_at: Double? }
     private struct Limits: Decodable { var five_hour: Limit?; var seven_day: Limit? }
@@ -155,7 +155,7 @@ private struct ProjectMenu: View {
             }
         } label: {
             HStack(spacing: 6) {
-                Text(store.current?.name ?? "HTerm").font(.system(size: 12.5, weight: .semibold))
+                Text(store.current?.name ?? "Termik").font(.system(size: 12.5, weight: .semibold))
                 Image(systemName: "chevron.down").font(.system(size: 8, weight: .bold)).foregroundStyle(.tertiary)
                 if let others { StatusBadge(record: others) }
             }
@@ -644,6 +644,46 @@ private struct EmptyState: View {
             Button("New Tab  ⌘T") { store.newTab() }.buttonStyle(.plain).foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+// MARK: Settings
+
+struct SettingsView: View {
+    /// Asset name of the chosen icon; "" is the bundle's own icon.
+    @AppStorage("appIcon") private var appIcon = ""
+
+    private let icons: [(name: String, title: String, image: NSImage)] = [
+        ("", "Default", NSWorkspace.shared.icon(forFile: Bundle.main.bundlePath)),
+        ("icon-neon", "Neon", NSImage(named: "icon-neon")!),
+    ]
+
+    var body: some View {
+        Form {
+            LabeledContent("App Icon") {
+                HStack(spacing: 16) {
+                    ForEach(icons, id: \.name) { icon in
+                        Button {
+                            appIcon = icon.name
+                            // ponytail: runtime Dock icon only; Finder and the closed-app Dock keep the bundle icon.
+                            // NSWorkspace.setIcon on the bundle would persist it but breaks codesign on rebuild.
+                            NSApp.applicationIconImage = NSImage(named: icon.name)
+                        } label: {
+                            VStack(spacing: 4) {
+                                Image(nsImage: icon.image).resizable().frame(width: 64, height: 64)
+                                    .padding(4)
+                                    .background(.tint.opacity(appIcon == icon.name ? 0.25 : 0), in: .rect(cornerRadius: 12))
+                                Text(icon.title).font(.caption)
+                            }
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityAddTraits(appIcon == icon.name ? .isSelected : [])
+                    }
+                }
+            }
+        }
+        .padding(20)
+        .frame(width: 360)
     }
 }
 

@@ -25,11 +25,11 @@ final class SurfaceView: NSView, NSTextInputClient {
         cfg.platform_tag = GHOSTTY_PLATFORM_MACOS
         cfg.platform = ghostty_platform_u(macos: ghostty_platform_macos_s(nsview: Unmanaged.passUnretained(self).toOpaque()))
         cfg.scale_factor = Double(NSScreen.main?.backingScaleFactor ?? 2)
-        // GHOSTLINE_SESSION_FILE tells hooks/ghostline-session where to record this tab's Claude session.
+        // TERMIK_SESSION_FILE tells hooks/termik-session where to record this tab's Claude session.
         // Ghostty copies these strings, so they only need to outlive ghostty_surface_new.
         let session = tab.sessionFile.path(percentEncoded: false)
         surface = cwd.withCString { cwdPtr in
-            "GHOSTLINE_SESSION_FILE".withCString { key in
+            "TERMIK_SESSION_FILE".withCString { key in
                 session.withCString { value in
                     (initialInput ?? "").withCString { input in
                         var env = ghostty_env_var_s(key: key, value: value)

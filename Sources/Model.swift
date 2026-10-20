@@ -39,7 +39,7 @@ final class Tab: Identifiable {
             .nilIfEmpty.flatMap { $0.allSatisfy { $0.isLetter || $0.isNumber || $0 == "-" || $0 == "_" } ? $0 : nil }
     }
 
-    /// Where `hooks/ghostline-session` records this tab's Claude session id (via GHOSTLINE_SESSION_FILE).
+    /// Where `hooks/termik-session` records this tab's Claude session id (via TERMIK_SESSION_FILE).
     var sessionFile: URL { Store.dir.appending(path: "sessions/\(id.uuidString)") }
 
     /// Pastes into the agent's prompt (bracketed, not submitted) and switches to this tab.
@@ -395,7 +395,7 @@ final class Store {
     }
 
     static let dir: URL = {
-        let dir = URL.applicationSupportDirectory.appending(path: "Ghostline")
+        let dir = URL.applicationSupportDirectory.appending(path: "Termik")
         try? FileManager.default.createDirectory(at: dir.appending(path: "sessions"), withIntermediateDirectories: true)
         return dir
     }()
@@ -431,7 +431,7 @@ final class Store {
 
 // MARK: Snippets
 
-/// A saved prompt: one Markdown file in ~/.config/ghostline/snippets, named by its title.
+/// A saved prompt: one Markdown file in ~/.config/termik/snippets, named by its title.
 struct Snippet: Identifiable {
     var id: String { title }
     let title: String
@@ -439,7 +439,7 @@ struct Snippet: Identifiable {
 }
 
 extension Store {
-    static var snippetsDir: URL { URL(filePath: NSHomeDirectory()).appending(path: ".config/ghostline/snippets") }
+    static var snippetsDir: URL { URL(filePath: NSHomeDirectory()).appending(path: ".config/termik/snippets") }
 
     /// Reads the snippets folder, seeding a few examples the first time.
     func loadSnippets() {

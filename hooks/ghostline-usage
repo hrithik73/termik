@@ -1,6 +1,0 @@
-#!/bin/sh
-# Saves Claude's plan limits for Ghostline's footer. Call from your Claude statusLine script with its stdin JSON:
-#   input=$(cat); printf %s "$input" | /path/to/ghostline-usage
-d="$HOME/Library/Application Support/Ghostline"
-jq -c '.rate_limits // empty' > "$d/usage.json.tmp" 2>/dev/null && mv "$d/usage.json.tmp" "$d/usage.json"
-exit 0

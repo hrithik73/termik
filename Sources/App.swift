@@ -4,12 +4,12 @@ import SwiftUI
 import UserNotifications
 
 @main
-struct GhostlineApp: App {
+struct TermikApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
     @State private var store = Store.shared
 
     var body: some Scene {
-        Window("HTerm", id: "main") {
+        Window("Termik", id: "main") {
             RootView().environment(store)
         }
         .windowStyle(.hiddenTitleBar)
@@ -29,18 +29,21 @@ struct GhostlineApp: App {
             if waiting > 0 { Text("\(waiting)") }
         }
         .menuBarExtraStyle(.window)
+
+        Settings { SettingsView() }
     }
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ n: Notification) {
         _ = Ghostty.shared
+        NSApp.applicationIconImage = UserDefaults.standard.string(forKey: "appIcon").flatMap(NSImage.init(named:))
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
     }
     func applicationDidBecomeActive(_ n: Notification) { ghostty_app_set_focus(Ghostty.shared.app, true) }
     func applicationDidResignActive(_ n: Notification) { ghostty_app_set_focus(Ghostty.shared.app, false) }
     func applicationWillTerminate(_ n: Notification) { Store.shared.save() }
-    /// `open -a HTerm <dir>` from any terminal opens the folder as a project.
+    /// `open -a Termik <dir>` from any terminal opens the folder as a project.
     func application(_ app: NSApplication, open urls: [URL]) {
         for url in urls where url.hasDirectoryPath { Store.shared.open(root: url.path(percentEncoded: false)) }
     }
@@ -148,9 +151,14 @@ final class Ghostty {
             }
         case GHOSTTY_ACTION_DESKTOP_NOTIFICATION:
             let n = a.action.desktop_notification
-            notify(n.title.map { String(cString: $0) } ?? "HTerm", n.body.map { String(cString: $0) } ?? "")
+            notify(n.title.map { String(cString: $0) } ?? "Termik", n.body.map { String(cString: $0) } ?? "")
         case GHOSTTY_ACTION_RING_BELL:
             NSSound.beep()
+        case GHOSTTY_ACTION_OPEN_CONFIG:
+            // Ghostty's ⌘, reaches the surface before the menu; open Termik's Settings instead of the config file.
+            if let menu = NSApp.mainMenu?.items.first?.submenu, let i = menu.items.firstIndex(where: { $0.keyEquivalent == "," }) {
+                menu.performActionForItem(at: i)
+            }
         case GHOSTTY_ACTION_TOGGLE_FULLSCREEN:
             NSApp.keyWindow?.toggleFullScreen(nil)
         case GHOSTTY_ACTION_QUIT:

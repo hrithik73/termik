@@ -1,4 +1,4 @@
-# HTerm
+# Termik
 
 A minimal macOS terminal on libghostty (renders and reads config exactly like Ghostty) with:
 
@@ -8,7 +8,7 @@ A minimal macOS terminal on libghostty (renders and reads config exactly like Gh
 - **Diff review** (⌘⇧R): the tab's changes against `HEAD` (or any ref) in VS Code's diff editor. Edit and ⌘S,
   discard a file, or select lines and ⌘↩ to comment; "Send to Agent" pastes the comments into the agent's prompt.
 - **Command palette** (⌘P): jump to any tab or project, paste a snippet, or run an action.
-- **Prompt snippets**: Markdown files in `~/.config/ghostline/snippets/` (name = title). ⌥⌘1–9 or the palette
+- **Prompt snippets**: Markdown files in `~/.config/termik/snippets/` (name = title). ⌥⌘1–9 or the palette
   pastes one into the agent's prompt without sending it.
 - **Session resume**: tabs that had Claude running reopen it with `claude --resume <session>` after a relaunch.
 - **OSC 7501 program status** ([spec](https://www.superlogical.com/rex/docs/build/program-status)): each tab shows the agent's icon and a state badge (working, blocked, done, error). A notification fires when a background agent needs you.
@@ -19,7 +19,7 @@ A minimal macOS terminal on libghostty (renders and reads config exactly like Gh
 git submodule update --init
 ./scripts/build-ghosttykit.sh      # needs Zig 0.16 in .tools/ or on PATH, plus Xcode's Metal toolchain
 ./scripts/fetch-monaco.sh          # VS Code's editor, for the review window
-xcodegen generate && open Ghostline.xcodeproj
+xcodegen generate && open Termik.xcodeproj
 ./scripts/test-status.sh           # OSC 7501 logic self-check
 ```
 
@@ -35,7 +35,7 @@ xcodegen generate && open Ghostline.xcodeproj
 | ⌘W | Close pane (closes the tab when it's the last one) |
 | ⌘⌥←↑↓→ · ⌘[ / ⌘] | Move between panes |
 | ⌃⌘←↑↓→ · ⌃⌘= | Resize pane · equalize panes |
-| ⌘⇧O | Add a project: ↩ adds the current folder, or type a path (⇥ completes). Also `open -a HTerm <dir>` |
+| ⌘⇧O | Add a project: ↩ adds the current folder, or type a path (⇥ completes). Also `open -a Termik <dir>` |
 | ⌘1–9 | Go to tab N in the current project |
 | ⌃⌘1–9 | Go to project N |
 | ⌘⇧A · ⌥⌘J | Agents list · jump to the next agent needing you |
@@ -49,11 +49,11 @@ Your Ghostty keybinds keep working; `new_tab` and `goto_tab` act on the current 
 To make Claude Code report its status, merge `hooks/claude-settings.json` into `~/.claude/settings.json`.
 Any tool can report with `hooks/osc7501 <state> [msg] [kind]`. Other terminals ignore the sequence.
 
-The same file wires `hooks/ghostline-session` to SessionStart/SessionEnd. It records each tab's session id in
-`GHOSTLINE_SESSION_FILE` (set by Ghostline) so the tab can resume it; exiting Claude yourself forgets it.
+The same file wires `hooks/termik-session` to SessionStart/SessionEnd. It records each tab's session id in
+`TERMIK_SESSION_FILE` (set by Termik) so the tab can resume it; exiting Claude yourself forgets it.
 
 ## Usage limits
 
 The footer shows Claude's session (5h) and weekly (7d) usage. Claude Code only exposes them to the statusLine
-command, so call `hooks/ghostline-usage` from it with the JSON on stdin (it writes `usage.json` in Ghostline's
+command, so call `hooks/termik-usage` from it with the JSON on stdin (it writes `usage.json` in Termik's
 support folder). The meters appear after the first statusline refresh.

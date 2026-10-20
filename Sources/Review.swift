@@ -70,7 +70,7 @@ final class Review {
         web = WKWebView(frame: .zero, configuration: cfg)
         web.setValue(false, forKey: "drawsBackground")
         web.isInspectable = true
-        cfg.userContentController.add(ScriptHandler { [weak self] in self?.receive($0) }, name: "ghostline")
+        cfg.userContentController.add(ScriptHandler { [weak self] in self?.receive($0) }, name: "termik")
         if let page = Bundle.main.url(forResource: "review", withExtension: "html") {
             web.loadFileURL(page, allowingReadAccessTo: Bundle.main.resourceURL!)
         }

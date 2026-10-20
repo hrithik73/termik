@@ -1,6 +1,6 @@
 .tools/
 GhosttyKit.xcframework/
-Ghostline.xcodeproj/
+Termik.xcodeproj/
 build/
 vendor/monaco/
 .build/

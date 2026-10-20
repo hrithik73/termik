@@ -1,0 +1,13 @@
+#!/bin/sh
+# Records the Claude session running in a Termik tab, so Termik can `claude --resume` it after a relaunch.
+# usage (Claude hooks): termik-session start|end   — hook JSON on stdin
+# Termik sets TERMIK_SESSION_FILE per tab; elsewhere this does nothing.
+[ -n "${TERMIK_SESSION_FILE:-}" ] || { cat >/dev/null; exit 0; }
+input=$(cat)
+field() { printf %s "$input" | sed -n "s/.*\"$1\" *: *\"\([^\"]*\)\".*/\1/p"; }
+case $1 in
+  start) id=$(field session_id); [ -n "$id" ] && printf %s "$id" > "$TERMIK_SESSION_FILE" ;;
+  # Quitting Termik ends Claude with reason "other": keep the record so the tab can resume.
+  end) [ "$(field reason)" = other ] || rm -f "$TERMIK_SESSION_FILE" ;;
+esac
+exit 0

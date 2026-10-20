@@ -25,7 +25,7 @@
 <script src="monaco/vs/loader.js"></script>
 <script>
   // Bridge: Swift calls show(file) and setMarks(ranges); we post {type: save|comment, path, …} back.
-  const post = m => webkit.messageHandlers.ghostline.postMessage(m)
+  const post = m => webkit.messageHandlers.termik.postMessage(m)
   var diff, ed, deco, file
 
   function show(f) {
@@ -96,7 +96,7 @@
       if (file && !file.readOnly) post({ type: 'save', path: file.path, text: ed.getValue() })
     })
     ed.addAction({
-      id: 'ghostline.comment', label: 'Comment for Agent', run: ask,
+      id: 'termik.comment', label: 'Comment for Agent', run: ask,
       keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter],
       contextMenuGroupId: 'navigation', contextMenuOrder: 0,
     })
