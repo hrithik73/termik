@@ -6,6 +6,10 @@ A minimal macOS terminal for coding agents, built on libghostty (renders and rea
 
 ![Termik](docs/screenshot.png)
 
+Several Claude Code agents at a glance: per-tab status, and ⌘⇧A for the full list.
+
+![Agents](docs/screenshot-agents.png)
+
 ## Install
 
 ```sh
